@@ -18,6 +18,7 @@ if cuda_available:
 x = torch.rand(3, 3).to(device)
 y = torch.rand(3, 3).to(device)
 z = x + y
+w = x @ y
 
 print("Computation result (x + y):")
 print(z)
