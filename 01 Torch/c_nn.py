@@ -1,6 +1,5 @@
 import torch
 import torch.nn as nn
-import torch.optim as optim
 
 # Define the neural network class
 class SimpleNet(nn.Module):
@@ -18,9 +17,6 @@ class SimpleNet(nn.Module):
 
 # Create an instance of the network
 net = SimpleNet()
-
-# Print the network architecture
-print(net)
 
 # Create some random input data
 input_data = torch.randn(1, 10)  # Batch size of 1, 10 features
