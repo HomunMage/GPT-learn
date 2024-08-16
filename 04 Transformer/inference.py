@@ -1,4 +1,4 @@
-# test.py
+# inference.py
 
 import os
 import torch
