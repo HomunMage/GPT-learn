@@ -22,8 +22,8 @@ class OneLayerAttentionModel(nn.Module):
         self.position_embedding_table = nn.Embedding(block_size, embed_dim)
         self.key_linear = nn.Linear(embed_dim, embed_dim)
         self.value_linear = nn.Linear(embed_dim, embed_dim)
+        self.query_linear = nn.Linear(embed_dim, embed_dim)  # Added for Q calculation
 
-        self.attention = nn.Linear(embed_dim, embed_dim)
         self.fc = nn.Linear(embed_dim, vocab_size)
         self.block_size = block_size
 
@@ -38,7 +38,7 @@ class OneLayerAttentionModel(nn.Module):
 
     def forward(self, x):
         batch_size, seq_length = x.size()
-        
+
         # Ensure sequence length doesn't exceed block size
         if seq_length > self.block_size:
             raise ValueError(f"Sequence length ({seq_length}) exceeds block size ({self.block_size})")
@@ -48,10 +48,12 @@ class OneLayerAttentionModel(nn.Module):
         position_embeddings = self.position_embedding_table(position_ids)
         
         x = token_embeddings + position_embeddings
-        Q = self.attention(x)
+
+        Q = self.query_linear(x)
         K = self.key_linear(x)
         V = self.value_linear(x)
         x = self.scaled_dot_product_attention(Q, K, V)
+        
         x = self.fc(x)
         return x
 
