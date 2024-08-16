@@ -3,14 +3,10 @@
 import os
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
 import torch.optim as optim
+import torch.nn.functional as F
 from torch.utils.data import Dataset, DataLoader
 from transformers import AutoTokenizer
-
-
-window_size = 128
-
 
 # training data
 # wget https://raw.githubusercontent.com/karpathy/char-rnn/master/data/tinyshakespeare/input.txt
@@ -18,22 +14,21 @@ def load_input_txt():
     with open('input.txt', 'r') as file:
         return file.read()
 
-
-# Define the model with one attention layer
+# Define the model
 class OneLayerAttentionModel(nn.Module):
-    def __init__(self, vocab_size, embed_dim):
+    def __init__(self, vocab_size, embed_dim, block_size):
         super(OneLayerAttentionModel, self).__init__()
-        self.embed_dim = embed_dim
-        self.embedding = nn.Embedding(vocab_size, embed_dim)  # Add embedding layer
-        self.query_linear = nn.Linear(embed_dim, embed_dim)
+        self.token_embedding_table = nn.Embedding(vocab_size, embed_dim)
+        self.position_embedding_table = nn.Embedding(block_size, embed_dim)
         self.key_linear = nn.Linear(embed_dim, embed_dim)
         self.value_linear = nn.Linear(embed_dim, embed_dim)
-        self.out_linear = nn.Linear(embed_dim, vocab_size)  # Output dimension should be vocab_size
-    
+
+        self.attention = nn.Linear(embed_dim, embed_dim)
+        self.fc = nn.Linear(embed_dim, vocab_size)
+        self.block_size = block_size
+
     def scaled_dot_product_attention(self, Q, K, V, mask=None):
         d_k = Q.size(-1)
-        # Ensure the sqrt operation is on the correct device
-
         scores = torch.matmul(Q, K.transpose(-2, -1)) / torch.sqrt(torch.tensor(d_k, dtype=torch.float32, device=Q.device))
         if mask is not None:
             scores += mask
@@ -41,61 +36,62 @@ class OneLayerAttentionModel(nn.Module):
         output = torch.matmul(attention_weights, V)
         return output
 
-    def forward(self, x, mask=None):
-        x = self.embedding(x)  # Convert token IDs to embeddings
-        Q = self.query_linear(x)
+    def forward(self, x):
+        batch_size, seq_length = x.size()
+        
+        # Ensure sequence length doesn't exceed block size
+        if seq_length > self.block_size:
+            raise ValueError(f"Sequence length ({seq_length}) exceeds block size ({self.block_size})")
+
+        token_embeddings = self.token_embedding_table(x)
+        position_ids = torch.arange(seq_length, device=x.device).unsqueeze(0).expand(batch_size, -1)
+        position_embeddings = self.position_embedding_table(position_ids)
+        
+        x = token_embeddings + position_embeddings
+        Q = self.attention(x)
         K = self.key_linear(x)
         V = self.value_linear(x)
-        attention_output = self.scaled_dot_product_attention(Q, K, V, mask)
-        output = self.out_linear(attention_output)
-        return output
+        x = self.scaled_dot_product_attention(Q, K, V)
+        x = self.fc(x)
+        return x
 
-# Custom dataset class for rolling window
+# Custom dataset
 class RollingWindowDataset(Dataset):
-    def __init__(self, input_ids, window_size):
-        self.input_ids = input_ids
-        self.window_size = window_size
+    def __init__(self, data, block_size):
+        self.data = data
+        self.block_size = block_size
 
     def __len__(self):
-        return len(self.input_ids) - self.window_size + 1
+        return len(self.data) - self.block_size
 
     def __getitem__(self, idx):
-        x_ids = self.input_ids[idx:idx + self.window_size]
-        y_ids = self.input_ids[idx + 1:idx + self.window_size + 1]
-        x = torch.tensor(x_ids, dtype=torch.long)  # Use long for token IDs
-        y = torch.tensor(y_ids, dtype=torch.long)  # Use long for target token IDs
-        return x, y
-
-
+        x = self.data[idx:idx + self.block_size]
+        y = self.data[idx + 1:idx + self.block_size + 1]
+        return torch.tensor(x, dtype=torch.long), torch.tensor(y, dtype=torch.long)
 
 # Training function and checkpoint saving
 def train_model(model, dataloader, optimizer, criterion, device='cpu', print_interval=100, checkpoint_interval=10000, start_step=0):
-    model.to(device)  # Move model to the specified device
+    model.to(device)
     model.train()
-
     step = start_step
     running_loss = 0.0
 
-    # Iterate through DataLoader and skip batches until reaching the desired step
     for epoch in range(start_step, len(dataloader) + start_step):
         if step < start_step:
             # Skip batches until we reach the start_step
             for _ in range(start_step - step):
-                next(iter(dataloader))  # Move to next batch
+                next(iter(dataloader))
                 step += 1
                 if step >= start_step:
                     break
 
         for x_batch, y_batch in dataloader:
-            x_batch, y_batch = x_batch.to(device), y_batch.to(device)  # Move data to the specified device
+            x_batch, y_batch = x_batch.to(device), y_batch.to(device)
             optimizer.zero_grad()
-
-            output = model(x_batch)  # Use the batch dimension correctly
-
-            output = output.view(-1, output.size(-1))  # Flatten for loss calculation
+            output = model(x_batch)
+            output = output.view(-1, output.size(-1))
             y_batch = y_batch.view(-1)
             loss = criterion(output, y_batch)
-
             loss.backward()
             optimizer.step()
 
@@ -127,35 +123,32 @@ def train_model(model, dataloader, optimizer, criterion, device='cpu', print_int
     print(f'Saved final model: {final_checkpoint_path}')
 
 
-
-
 # Main script
 if __name__ == "__main__":
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
 
-    # Load data and tokenizer
+
     input_txt = load_input_txt()
     tokenizer = AutoTokenizer.from_pretrained("gpt2")
     input_ids = tokenizer.encode(input_txt)
-
-    # Print the length of tokens
     print(f'Token length after tokenization: {len(input_ids)}')
 
-    # Define window size and create dataset
-    dataset = RollingWindowDataset(input_ids, window_size)
+    # Define block size and create dataset
+    block_size = 32  # Should match the block size used in your model
+    dataset = RollingWindowDataset(input_ids, block_size)
     dataloader = DataLoader(dataset, batch_size=1, shuffle=True)
 
     # Define model and move it to the device
-    vocab_size = tokenizer.vocab_size  # Get vocab size from tokenizer
+    vocab_size = tokenizer.vocab_size
     embed_dim = 768
-    model = OneLayerAttentionModel(vocab_size=vocab_size, embed_dim=embed_dim).to(device)
+    model = OneLayerAttentionModel(vocab_size=vocab_size, embed_dim=embed_dim, block_size=block_size).to(device)
 
     # Initialize optimizer after moving the model to the device
     optimizer = optim.Adam(model.parameters(), lr=1e-4)
     criterion = nn.CrossEntropyLoss()
 
     # Optionally load from a checkpoint
-    start_step = 0  # Set this to the last checkpoint step you want to resume from
+    start_step = 0
     checkpoint_path = f'checkpoint_step_{start_step}.pth'
     if os.path.exists(checkpoint_path):
         print(f'Loading model and optimizer from checkpoint: {checkpoint_path}')
@@ -167,5 +160,5 @@ if __name__ == "__main__":
         start_step = 0
 
     # Training the model
-    checkpoint_interval = 20000  # Set the checkpoint interval
+    checkpoint_interval = 20000
     train_model(model, dataloader, optimizer, criterion, device=device, print_interval=100, checkpoint_interval=checkpoint_interval, start_step=start_step)
