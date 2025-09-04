@@ -1,0 +1,5 @@
+conda install pytorch torchvision torchaudio pytorch-cuda=12.2 -c pytorch -c nvidia
+
+pip install torch -f https://download.pytorch.org/whl/torch_stable.html
+
+pip install langchain-huggingface langchain-core langgraph httpx langchain transformers accelerate
